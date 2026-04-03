@@ -5,9 +5,16 @@ import {
   useDragControls,
   useReducedMotion,
   animate,
+  AnimatePresence,
   type PanInfo,
 } from "framer-motion";
 import { useRef, useState, useEffect, useCallback } from "react";
+import musicAiFillSrc from "./assets/music-ai-fill.png";
+import waveformSrc from "./assets/waveform.svg";
+import albumOmahLaySrc from "./assets/album-omah-lay.png";
+import albumAsakeSrc from "./assets/album-asake.png";
+import albumMavoSrc from "./assets/album-mavo.png";
+import albumNo11Src from "./assets/album-no11.png";
 
 /* ─────────────────────────────────────────────────────────
  * ANIMATION STORYBOARD — Music Chatbot Widget
@@ -25,6 +32,18 @@ import { useRef, useState, useEffect, useCallback } from "react";
  *    0ms   cover: rotateX 0→−22°, top:4→11, height:96→89  (folder crack)
  *    0ms   disc: y:0→−34  (floats up from inside)
  *    0ms   audio preview fades in (RAF loop 0→0.4)
+ *
+ * ALBUM CLICK → NOW PLAYING
+ *    0ms   whileTap scale:0.93 on card
+ *          idle content exit: y:0→-10, opacity:1→0, scale:1→0.97 (120ms)
+ *   60ms   now-playing enters: y:16→0, opacity:0→1, scale:0.95→1
+ *          spring(stiffness:280, damping:26)
+ *          header stagger +60ms | player +80ms | controls +120ms
+ *          waveform bars stagger: i * 18ms
+ *
+ * NOW PLAYING → IDLE
+ *    0ms   now-playing exits: y:0→-8, opacity:1→0, scale:1→0.98 (140ms)
+ *   60ms   idle content enters: y:8→0, opacity:0→1
  *
  * DRAG  (card body only, not handle)
  *    ±2.5° tilt derived from pointer delta via useTransform
@@ -47,12 +66,14 @@ const DISC_SPRING    = { type: "spring", stiffness: 320, damping: 26 } as const;
 const FLIP_SPRING    = { type: "spring", stiffness: 260, damping: 26 } as const;
 // Send button press — snappy micro-interaction
 const BTN_SPRING     = { type: "spring", visualDuration: 0.16, bounce: 0.4 } as const;
+// Now playing content transition
+const NP_ENTER_SPRING = { type: "spring", stiffness: 280, damping: 26 } as const;
 
 // ── Album data ─────────────────────────────────────────────
 const ALBUMS = [
   {
     id: 1,
-    src: "https://www.figma.com/api/mcp/asset/6028659e-99d1-4f34-8fd9-2dd8470ceefc",
+    src: albumOmahLaySrc,
     title: "Clarity of mind",
     artist: "Omah Lay",
     query: "Clarity Omah Lay",
@@ -60,7 +81,7 @@ const ALBUMS = [
   },
   {
     id: 2,
-    src: "https://www.figma.com/api/mcp/asset/a5046ded-e756-4cd9-9d07-9f6051e7d753",
+    src: albumAsakeSrc,
     title: "Worship",
     artist: "Asake",
     query: "Worship Asake",
@@ -68,7 +89,7 @@ const ALBUMS = [
   },
   {
     id: 3,
-    src: "https://www.figma.com/api/mcp/asset/1fb67a2a-f119-48b6-8488-2f3e759efda5",
+    src: albumMavoSrc,
     title: "Mofe",
     artist: "Mavo",
     query: "Mofe",
@@ -76,7 +97,7 @@ const ALBUMS = [
   },
   {
     id: 4,
-    src: "https://www.figma.com/api/mcp/asset/ec9986d6-7f6d-4d43-adf5-cac261fa8e2c",
+    src: albumNo11Src,
     title: "How far",
     artist: "No 11",
     query: "How Far Davido",
@@ -98,6 +119,522 @@ function ArrowUpIcon() {
         strokeLinejoin="round"
       />
     </svg>
+  );
+}
+
+// ── Music AI fill icon — PNG asset, 16×16 display ──────────
+// Natural size: 24×23px. Displayed at inset-derived pixel coords
+// inside a 16px container: top/left 1.89px, 11.67×11.11px
+function MusicAiFillIcon() {
+  return (
+    <div
+      style={{ position: "relative", width: 16, height: 16, flexShrink: 0, overflow: "hidden" }}
+      aria-hidden="true"
+    >
+      <img
+        src={musicAiFillSrc}
+        alt=""
+        draggable={false}
+        style={{
+          position: "absolute",
+          top: 1.89,
+          left: 1.89,
+          width: 11.67,
+          height: 11.11,
+          display: "block",
+        }}
+      />
+    </div>
+  );
+}
+
+// ── Pause icon — Figma node 202233:43637, LIGHT button ─────
+// SVG: viewBox 0 0 5.83333 8.75, two vertical bars
+// Rendered dark (#171717) — sits on light #f7f7f7 button bg
+// inset(18.75% 29.17%) on 14px = top/bottom 2.625px, left/right 4.083px
+// → 5.833×8.75px bars, rendered at left:4.083 top:2.625 inside 14px container
+function PauseIconImg() {
+  return (
+    <svg
+      viewBox="0 0 5.83333 8.75"
+      width={5.83333}
+      height={8.75}
+      fill="none"
+      aria-hidden="true"
+      style={{ display: "block", overflow: "visible", flexShrink: 0 }}
+    >
+      {/* Left bar */}
+      <rect x={0} y={0} width={0.972222} height={8.75} fill="#171717" />
+      {/* Right bar */}
+      <rect x={4.86111} y={0} width={0.972222} height={8.75} fill="#171717" />
+    </svg>
+  );
+}
+
+// ── Play icon — Figma node 202233:43915, DARK button ───────
+// SVG: viewBox 0 0 7.34671 8.94187, filled triangle
+// Rendered white — sits on dark #171717 button bg
+// inset(18.06% 18.36% 18.06% 29.17%) on 14px
+// → 7.347×8.942px, left:4.083 top:2.528 inside 14px container
+function PlayIconImg() {
+  return (
+    <svg
+      viewBox="0 0 7.34671 8.94187"
+      width={7.34671}
+      height={8.94187}
+      fill="none"
+      aria-hidden="true"
+      style={{ display: "block", overflow: "visible", flexShrink: 0 }}
+    >
+      {/* Triangle — filled white for contrast on dark bg */}
+      <path d="M6.83398 4.4707L0.5 8.42969V0.511719L6.83398 4.4707Z" fill="white" />
+    </svg>
+  );
+}
+
+// ── Close icon ─────────────────────────────────────────────
+function CloseIcon() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true" focusable="false">
+      <path d="M1.5 1.5L8.5 8.5M8.5 1.5L1.5 8.5" stroke="#a3a3a3" strokeWidth="1.25" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// ── Keyboard hint badge ────────────────────────────────────
+function KbdHint({ children }: { children: React.ReactNode }) {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        fontSize: 10,
+        fontWeight: 500,
+        color: "#5c5c5c",
+        background: "#f0f0f0",
+        borderRadius: 4,
+        padding: "1px 5px",
+        lineHeight: "16px",
+        fontFamily: "'Inter',system-ui,sans-serif",
+        letterSpacing: "-0.04px",
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────
+ * WAVEFORM PROGRESS — Figma-exact waveform image reveal
+ * Two layered copies of the waveform image:
+ *   Bottom: greyed-out (unplayed)
+ *   Top: black (played) — clip-path inset reveals left→right
+ * A spring-driven motion value smoothly animates the clip
+ * between each second tick, no jumping.
+ * ───────────────────────────────────────────────────────── */
+const PREVIEW_DURATION = 30; // iTunes preview length in seconds
+// waveformSrc imported at top — local SVG asset
+
+function WaveformProgress({
+  elapsed,
+  total,
+  reduceMotion,
+}: {
+  elapsed: number;
+  total: number;
+  reduceMotion: boolean;
+}) {
+  const targetPct = total > 0 ? Math.min(1, elapsed / total) : 0;
+  const progress = useMotionValue(0);
+
+  useEffect(() => {
+    animate(progress, targetPct, reduceMotion
+      ? { duration: 0 }
+      : { type: "spring", stiffness: 55, damping: 22, mass: 0.6 }
+    );
+  }, [targetPct, reduceMotion, progress]);
+
+  // clip-path: inset(top right% bottom left) — right shrinks as song plays
+  const clipPath = useTransform(
+    progress,
+    (v) => `inset(0 ${((1 - v) * 100).toFixed(3)}% 0 0 round 1px)`
+  );
+
+  const imgStyle: React.CSSProperties = {
+    position: "absolute",
+    inset: 0,
+    width: "100%",
+    height: "100%",
+    objectFit: "fill",
+    display: "block",
+  };
+
+  return (
+    <div
+      style={{ flex: 1, position: "relative", height: 26, minWidth: 0 }}
+      aria-hidden="true"
+    >
+      {/* Unplayed: reduced opacity → grey bars on white bg */}
+      <img
+        src={waveformSrc}
+        alt=""
+        draggable={false}
+        style={{ ...imgStyle, filter: "opacity(0.2)" }}
+      />
+      {/* Played: full opacity dark bars, clip-path reveals left→right */}
+      <motion.img
+        src={waveformSrc}
+        alt=""
+        draggable={false}
+        style={{ ...imgStyle, clipPath }}
+      />
+    </div>
+  );
+}
+
+// ── Now playing card ───────────────────────────────────────
+function NowPlayingCard({
+  album,
+  isPlaying,
+  elapsed,
+  onPlayPause,
+  onPrevious: _onPrevious,
+  onNext: _onNext,
+  onClose,
+  reduceMotion,
+}: {
+  album: Album;
+  isPlaying: boolean;
+  elapsed: number;
+  onPlayPause: () => void;
+  onPrevious: () => void;
+  onNext: () => void;
+  onClose: () => void;
+  reduceMotion: boolean;
+}) {
+  const fmt = (s: number) =>
+    `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+
+  const stagger = (i: number) =>
+    reduceMotion
+      ? { duration: 0 }
+      : { ...NP_ENTER_SPRING, delay: i * 0.055 };
+
+  return (
+    <motion.div
+      key="now-playing"
+      initial={reduceMotion ? false : { opacity: 0, y: 14, scale: 0.96 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={
+        reduceMotion
+          ? { opacity: 0 }
+          : { opacity: 0, y: -8, scale: 0.98, transition: { duration: 0.14, ease: "easeIn" } }
+      }
+      transition={NP_ENTER_SPRING}
+      className="flex flex-col w-full"
+      style={{ gap: 10, paddingTop: 12, paddingBottom: 12 }}
+    >
+      {/* ── Header ── */}
+      <motion.div
+        initial={reduceMotion ? false : { opacity: 0, y: 6 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={stagger(0)}
+        className="flex items-center justify-between"
+        style={{ paddingLeft: 12, paddingRight: 12 }}
+      >
+        <div className="flex items-center" style={{ gap: 4 }}>
+          <MusicAiFillIcon />
+          <span
+            style={{
+              fontSize: 12,
+              fontWeight: 400,
+              color: "#a3a3a3",
+              fontFamily: "'Inter',system-ui,sans-serif",
+              letterSpacing: "-0.06px",
+            }}
+          >
+            Now playing...
+          </span>
+        </div>
+        {/* Close button */}
+        <motion.button
+          onClick={(e) => { e.stopPropagation(); onClose(); }}
+          whileHover={{ scale: 1.1, background: "#f0f0f0" }}
+          whileTap={{ scale: 0.9 }}
+          transition={BTN_SPRING}
+          onPointerDown={(e) => e.stopPropagation()}
+          style={{
+            width: 20,
+            height: 20,
+            borderRadius: 6,
+            background: "transparent",
+            border: "none",
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+          }}
+          aria-label="Close now playing"
+        >
+          <CloseIcon />
+        </motion.button>
+      </motion.div>
+
+      {/* ── Divider ── */}
+      <motion.div
+        initial={reduceMotion ? false : { scaleX: 0, opacity: 0 }}
+        animate={{ scaleX: 1, opacity: 1 }}
+        transition={stagger(0.5)}
+        style={{
+          height: 1,
+          background: "#ebebeb",
+          width: "100%",
+          transformOrigin: "left center",
+        }}
+      />
+
+      {/* ── Player row ── */}
+      <motion.div
+        initial={reduceMotion ? false : { opacity: 0, y: 6 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={stagger(1)}
+        className="flex items-center"
+        style={{ paddingLeft: 12, paddingRight: 12, gap: 8 }}
+      >
+        {/* Vinyl pill */}
+        <motion.div
+          initial={reduceMotion ? false : { scale: 0.85, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={stagger(1.5)}
+          style={{
+            width: 113,
+            height: 45,
+            borderRadius: 10.7,
+            background: "linear-gradient(135deg, #f7f7f7 0%, #d5eaff 100%)",
+            boxShadow: "inset 0px -0.365px 0.486px 0px rgba(0,0,0,0.18), 0px 0px 0px 0.75px rgba(0,0,0,0.06)",
+            position: "relative",
+            overflow: "hidden",
+            flexShrink: 0,
+          }}
+        >
+          {/* Mini vinyl — absolute positioned */}
+          <div style={{ position: "absolute", left: 3.65, top: 3.65 }}>
+            <VinylDisc src={album.src} isSpinning={isPlaying} size={37} reduceMotion={reduceMotion} />
+          </div>
+          {/* Track info */}
+          <div
+            style={{
+              position: "absolute",
+              left: 46,
+              right: 8,
+              top: 0,
+              bottom: 0,
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "center",
+              gap: 1,
+            }}
+          >
+            <p
+              style={{
+                fontSize: 11,
+                fontWeight: 500,
+                color: "#171717",
+                letterSpacing: -0.066,
+                margin: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                fontFamily: "'Inter',system-ui,sans-serif",
+              }}
+            >
+              {album.title}
+            </p>
+            <p
+              style={{
+                fontSize: 10,
+                fontWeight: 400,
+                color: "#5c5c5c",
+                letterSpacing: -0.06,
+                margin: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                fontFamily: "'Inter',system-ui,sans-serif",
+              }}
+            >
+              {album.artist}
+            </p>
+          </div>
+        </motion.div>
+
+        {/* Progress section — elapsed · bar · total */}
+        <div style={{ display: "flex", alignItems: "center", gap: 7, flex: 1, minWidth: 0 }}>
+          {/* Elapsed */}
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 400,
+              color: "#5c5c5c",
+              fontVariantNumeric: "tabular-nums",
+              flexShrink: 0,
+              fontFamily: "'Inter',system-ui,sans-serif",
+              letterSpacing: "-0.04px",
+              minWidth: 26,
+            }}
+          >
+            {fmt(elapsed)}
+          </span>
+
+          {/* Waveform fills remaining space */}
+          <WaveformProgress elapsed={elapsed} total={PREVIEW_DURATION} reduceMotion={reduceMotion} />
+
+          {/* Total */}
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 400,
+              color: "#a3a3a3",
+              fontVariantNumeric: "tabular-nums",
+              flexShrink: 0,
+              fontFamily: "'Inter',system-ui,sans-serif",
+              letterSpacing: "-0.04px",
+              minWidth: 26,
+              textAlign: "right",
+            }}
+          >
+            0:30
+          </span>
+        </div>
+      </motion.div>
+
+      {/* ── Divider ── */}
+      <motion.div
+        initial={reduceMotion ? false : { scaleX: 0, opacity: 0 }}
+        animate={{ scaleX: 1, opacity: 1 }}
+        transition={stagger(2)}
+        style={{
+          height: 1,
+          background: "#ebebeb",
+          width: "100%",
+          transformOrigin: "left center",
+        }}
+      />
+
+      {/* ── Controls row ── */}
+      <motion.div
+        initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={stagger(2.5)}
+        className="flex items-center justify-between"
+        style={{ paddingLeft: 12, paddingRight: 12 }}
+      >
+        {/* Keyboard hints */}
+        <div className="flex items-center" style={{ gap: 4 }}>
+          <KbdHint>Space</KbdHint>
+          <span
+            style={{
+              fontSize: 10,
+              color: "#a3a3a3",
+              fontFamily: "'Inter',system-ui,sans-serif",
+              marginRight: 6,
+            }}
+          >
+            Pause
+          </span>
+          <KbdHint>P</KbdHint>
+          <span
+            style={{
+              fontSize: 10,
+              color: "#a3a3a3",
+              fontFamily: "'Inter',system-ui,sans-serif",
+              marginRight: 6,
+            }}
+          >
+            Prev
+          </span>
+          <KbdHint>N</KbdHint>
+          <span
+            style={{
+              fontSize: 10,
+              color: "#a3a3a3",
+              fontFamily: "'Inter',system-ui,sans-serif",
+            }}
+          >
+            Next
+          </span>
+        </div>
+
+        {/* Play / Pause button — styles switch with state
+              Playing  → LIGHT #f7f7f7 button shows pause icon  (Figma 202233:43635)
+              Paused   → DARK  #171717 button shows play  icon  (Figma 202233:43913) */}
+        <motion.button
+          onClick={(e) => { e.stopPropagation(); onPlayPause(); }}
+          onPointerDown={(e) => e.stopPropagation()}
+          whileHover={reduceMotion ? {} : { scale: 1.08 }}
+          whileTap={reduceMotion ? {} : { scale: 0.88 }}
+          transition={BTN_SPRING}
+          aria-label={isPlaying ? "Pause" : "Play"}
+          style={{
+            position: "relative",
+            width: 28,
+            height: 28,
+            borderRadius: 8,
+            background: isPlaying ? "#f7f7f7" : "#171717",
+            boxShadow: isPlaying
+              ? "0px 0px 0px 0.75px #ebebeb, inset 0px 1px 2px 0px rgba(255,255,255,0.16)"
+              : "0px 0px 0px 0.75px #171717, inset 0px 1px 2px 0px rgba(255,255,255,0.16)",
+            border: "none",
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+            overflow: "hidden",
+          }}
+        >
+          {/* Gloss overlay */}
+          <div
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              inset: 0,
+              borderRadius: 8,
+              pointerEvents: "none",
+              background: isPlaying
+                ? "linear-gradient(180deg, rgba(255,255,255,0.512) 6.67%, rgba(255,255,255,0) 103.33%)"
+                : "linear-gradient(180deg, rgba(255,255,255,0.154) 6.67%, rgba(255,255,255,0) 103.33%)",
+            }}
+          />
+          <AnimatePresence mode="wait" initial={false}>
+            {isPlaying ? (
+              <motion.span
+                key="pause"
+                initial={{ opacity: 0, scale: 0.55, rotate: -20 }}
+                animate={{ opacity: 1, scale: 1, rotate: 0 }}
+                exit={{ opacity: 0, scale: 0.55, rotate: 20 }}
+                transition={{ duration: 0.13, ease: "easeOut" }}
+                style={{ display: "flex", position: "relative", zIndex: 1 }}
+              >
+                <PauseIconImg />
+              </motion.span>
+            ) : (
+              <motion.span
+                key="play"
+                initial={{ opacity: 0, scale: 0.55, rotate: 20 }}
+                animate={{ opacity: 1, scale: 1, rotate: 0 }}
+                exit={{ opacity: 0, scale: 0.55, rotate: -20 }}
+                transition={{ duration: 0.13, ease: "easeOut" }}
+                style={{ display: "flex", position: "relative", zIndex: 1 }}
+              >
+                <PlayIconImg />
+              </motion.span>
+            )}
+          </AnimatePresence>
+        </motion.button>
+      </motion.div>
+    </motion.div>
   );
 }
 
@@ -190,7 +727,15 @@ function VinylDisc({
 }
 
 // ── Album card ─────────────────────────────────────────────
-function AlbumCard({ album, reduceMotion }: { album: Album; reduceMotion: boolean }) {
+function AlbumCard({
+  album,
+  reduceMotion,
+  onPlay,
+}: {
+  album: Album;
+  reduceMotion: boolean;
+  onPlay?: (album: Album, previewUrl: string | null) => void;
+}) {
   const [hovered, setHovered]       = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -248,11 +793,26 @@ function AlbumCard({ album, reduceMotion }: { album: Album; reduceMotion: boolea
     <motion.div
       className="flex flex-col gap-[8px] items-start shrink-0 cursor-pointer"
       style={{ width: 100 }}
-      // onHoverStart/End only fires for pointer:fine devices in Framer Motion
       onHoverStart={() => { setHovered(true); startAudio(); }}
       onHoverEnd={() => { setHovered(false); stopAudio(); }}
+      whileTap={reduceMotion ? {} : { scale: 0.93 }}
+      transition={BTN_SPRING}
+      onClick={() => {
+        stopAudio();
+        onPlay?.(album, previewUrl);
+      }}
+      role="button"
+      aria-label={`Play ${album.title} by ${album.artist}`}
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          stopAudio();
+          onPlay?.(album, previewUrl);
+        }
+      }}
     >
-      {/* perspective on container, not on the animated element — avoids affecting layout */}
+      {/* perspective on container, not on the animated element */}
       <div
         className="relative"
         style={{
@@ -271,9 +831,7 @@ function AlbumCard({ album, reduceMotion }: { album: Album; reduceMotion: boolea
           }}
         />
 
-        {/* ── Disc: pops up as cover tilts away ──
-            At rest: center at 50px → fully behind the cover (cover spans 4–100px)
-            On hover: center at 16px → 24px above container top */}
+        {/* ── Disc: pops up as cover tilts away ── */}
         <motion.div
           style={{
             position: "absolute",
@@ -287,9 +845,7 @@ function AlbumCard({ album, reduceMotion }: { album: Album; reduceMotion: boolea
           <VinylDisc src={album.src} isSpinning={hovered} size={80} reduceMotion={reduceMotion} />
         </motion.div>
 
-        {/* ── Front card: folder-lid flip ──
-            Rest:  top:4,  h:96  → tint peeks 4px
-            Hover: top:11, h:89  → tint exposed 11px, cover tilts −22° */}
+        {/* ── Front card: folder-lid flip ── */}
         <motion.div
           className="absolute left-0 w-[100px] rounded-[16px] overflow-hidden"
           style={{
@@ -315,7 +871,7 @@ function AlbumCard({ album, reduceMotion }: { album: Album; reduceMotion: boolea
         </motion.div>
       </div>
 
-      {/* Text — consistent weight, no hover weight change (avoids layout shift) */}
+      {/* Text */}
       <div
         className="flex flex-col items-start w-[100px]"
         style={{ fontFeatureSettings: "'ss11' 1,'calt' 0,'liga' 0" }}
@@ -362,12 +918,142 @@ export function ChatbotIdle() {
   const tiltX = useTransform(posY, [-80, 80], [2.5, -2.5]);
   const tiltY = useTransform(posX, [-80, 80], [-2.5, 2.5]);
 
+  // ── Now playing state ─────────────────────────────────────
+  const [playingAlbum, setPlayingAlbum] = useState<Album | null>(null);
+  const [isPlaying, setIsPlaying]       = useState(false);
+  const [elapsed, setElapsed]           = useState(0);
+  const nowPlayingAudioRef              = useRef<HTMLAudioElement | null>(null);
+  const nowPlayingFadeRef               = useRef<number>(0);
+  const previewUrlsCache                = useRef<Map<number, string | null>>(new Map());
+
+  // Elapsed timer
+  useEffect(() => {
+    if (!isPlaying || !playingAlbum) return;
+    const id = setInterval(() => setElapsed((e) => e + 1), 1000);
+    return () => clearInterval(id);
+  }, [isPlaying, playingAlbum]);
+
+  // Keyboard shortcuts for now playing
+  useEffect(() => {
+    if (!playingAlbum) return;
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "TEXTAREA" || tag === "INPUT") return;
+      if (e.key === " ") {
+        e.preventDefault();
+        handlePlayPause();
+      }
+      if (e.key === "p" || e.key === "P") {
+        e.preventDefault();
+        handleNavigate("prev");
+      }
+      if (e.key === "n" || e.key === "N") {
+        e.preventDefault();
+        handleNavigate("next");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playingAlbum]);
+
+  const startNowPlayingAudio = useCallback((url: string) => {
+    const audio = new Audio(url);
+    audio.volume = 0;
+    nowPlayingAudioRef.current = audio;
+    audio.play().catch(() => {});
+    cancelAnimationFrame(nowPlayingFadeRef.current);
+    const fadeIn = () => {
+      if (!nowPlayingAudioRef.current) return;
+      if (nowPlayingAudioRef.current.volume < 0.7) {
+        nowPlayingAudioRef.current.volume = Math.min(0.7, nowPlayingAudioRef.current.volume + 0.015);
+        nowPlayingFadeRef.current = requestAnimationFrame(fadeIn);
+      }
+    };
+    nowPlayingFadeRef.current = requestAnimationFrame(fadeIn);
+  }, []);
+
+  const stopNowPlayingAudio = useCallback(() => {
+    cancelAnimationFrame(nowPlayingFadeRef.current);
+    if (nowPlayingAudioRef.current) {
+      nowPlayingAudioRef.current.pause();
+      nowPlayingAudioRef.current = null;
+    }
+  }, []);
+
+  const handlePlayAlbum = useCallback(
+    (album: Album, previewUrl: string | null) => {
+      stopNowPlayingAudio();
+      previewUrlsCache.current.set(album.id, previewUrl);
+      setPlayingAlbum(album);
+      setIsPlaying(true);
+      setElapsed(0);
+      if (previewUrl) startNowPlayingAudio(previewUrl);
+    },
+    [startNowPlayingAudio, stopNowPlayingAudio]
+  );
+
+  const handlePlayPause = useCallback(() => {
+    setIsPlaying((prev) => {
+      const next = !prev;
+      if (nowPlayingAudioRef.current) {
+        if (next) nowPlayingAudioRef.current.play().catch(() => {});
+        else nowPlayingAudioRef.current.pause();
+      }
+      return next;
+    });
+  }, []);
+
+  const handleNavigate = useCallback(
+    (direction: "prev" | "next") => {
+      if (!playingAlbum) return;
+      const idx = ALBUMS.findIndex((a) => a.id === playingAlbum.id);
+      const nextIdx =
+        direction === "next"
+          ? (idx + 1) % ALBUMS.length
+          : (idx - 1 + ALBUMS.length) % ALBUMS.length;
+      const nextAlbum = ALBUMS[nextIdx];
+      const cachedUrl = previewUrlsCache.current.get(nextAlbum.id);
+
+      if (cachedUrl !== undefined) {
+        handlePlayAlbum(nextAlbum, cachedUrl);
+      } else {
+        // Fetch on demand
+        fetch(
+          `https://itunes.apple.com/search?term=${encodeURIComponent(
+            nextAlbum.query
+          )}&media=music&limit=1`
+        )
+          .then((r) => r.json())
+          .then((d) => {
+            const url = d.results?.[0]?.previewUrl ?? null;
+            handlePlayAlbum(nextAlbum, url);
+          })
+          .catch(() => handlePlayAlbum(nextAlbum, null));
+      }
+    },
+    [playingAlbum, handlePlayAlbum]
+  );
+
+  const handleClose = useCallback(() => {
+    stopNowPlayingAudio();
+    setPlayingAlbum(null);
+    setIsPlaying(false);
+    setElapsed(0);
+  }, [stopNowPlayingAudio]);
+
+  // Cleanup on unmount
+  useEffect(() => () => stopNowPlayingAudio(), [stopNowPlayingAudio]);
+
   // ── Drawer toggle (drag + keyboard) ──────────────────────
-  const toggleDrawer = useCallback((open: boolean) => {
-    animate(drawerProgress, open ? 1 : 0, reduceMotion ? { duration: 0 } : SNAP_SPRING);
-    expandedRef.current = open;
-    setExpanded(open);
-  }, [drawerProgress, reduceMotion]);
+  const toggleDrawer = useCallback(
+    (open: boolean) => {
+      animate(drawerProgress, open ? 1 : 0, reduceMotion ? { duration: 0 } : SNAP_SPRING);
+      expandedRef.current = open;
+      setExpanded(open);
+    },
+    [drawerProgress, reduceMotion]
+  );
 
   const onHandlePan = (_: PointerEvent, info: PanInfo) => {
     const base  = expandedRef.current ? 1 : 0;
@@ -385,12 +1071,15 @@ export function ChatbotIdle() {
   const [message, setMessage] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const handleSubmit = useCallback((e?: React.FormEvent) => {
-    e?.preventDefault();
-    if (!message.trim()) return;
-    setMessage("");
-    textareaRef.current?.focus();
-  }, [message]);
+  const handleSubmit = useCallback(
+    (e?: React.FormEvent) => {
+      e?.preventDefault();
+      if (!message.trim()) return;
+      setMessage("");
+      textareaRef.current?.focus();
+    },
+    [message]
+  );
 
   return (
     <div
@@ -425,7 +1114,8 @@ export function ChatbotIdle() {
         <div
           className="flex flex-col items-start pb-[2px] px-[2px] rounded-[22px] w-full"
           style={{
-            background: "linear-gradient(178.1deg,#F5F5F5 0.64%,rgba(232,232,232,0.535) 52.61%,rgba(245,245,245,0) 112.36%)",
+            background:
+              "linear-gradient(178.1deg,#F5F5F5 0.64%,rgba(232,232,232,0.535) 52.61%,rgba(245,245,245,0) 112.36%)",
           }}
         >
           {/* ── Handle — drag + keyboard toggle ──────────── */}
@@ -453,12 +1143,11 @@ export function ChatbotIdle() {
           </motion.div>
 
           {/* ── Songs drawer ──────────────────────────────── */}
-          {/* inert hides from tab order + assistive tech when collapsed */}
           <motion.div
             style={{ height: songsHeight, overflow: "hidden" }}
             className="w-full shrink-0"
             aria-hidden={!expanded}
-            {...(!expanded ? { inert: "" } : {})}
+            {...(!expanded ? { inert: true as unknown as boolean } : {})}
           >
             <motion.div
               style={{ opacity: songsOpacity, y: songsY }}
@@ -467,97 +1156,128 @@ export function ChatbotIdle() {
               <div className="px-[12px] w-full">
                 <p
                   className="text-[12px] leading-[16px] font-normal text-[#a3a3a3]"
-                  style={{ fontFamily: "'Inter',system-ui,sans-serif", fontFeatureSettings: "'ss11' 1,'calt' 0,'liga' 0" }}
+                  style={{
+                    fontFamily: "'Inter',system-ui,sans-serif",
+                    fontFeatureSettings: "'ss11' 1,'calt' 0,'liga' 0",
+                  }}
                 >
                   Recent songs
                 </p>
               </div>
 
-              {/* overflow:visible so discs can pop above the row boundary */}
               <div
                 className="flex gap-[16px] items-start px-[12px] w-full"
                 style={{ overflow: "visible" }}
               >
                 {ALBUMS.map((album) => (
-                  <AlbumCard key={album.id} album={album} reduceMotion={reduceMotion} />
+                  <AlbumCard
+                    key={album.id}
+                    album={album}
+                    reduceMotion={reduceMotion}
+                    onPlay={handlePlayAlbum}
+                  />
                 ))}
               </div>
             </motion.div>
           </motion.div>
 
-          {/* ── Input card ────────────────────────────────────
-               Plain div + DOM ref: no Framer Motion wrapper → no will-change:transform
-               at rest → CPU text rendering → correct weight at all times. */}
+          {/* ── Bottom card: idle textarea ↔ now playing ──── */}
           <div style={{ width: "100%" }}>
             <div
               ref={bottomCardRef}
               onPointerDown={(e) => dragControls.start(e)}
-              className="bg-white rounded-[20px] border border-[#ebebeb] w-full shrink-0"
+              className="bg-white rounded-[20px] border border-[#ebebeb] w-full shrink-0 overflow-hidden"
               style={{ boxShadow: "0px 1px 2px 0px rgba(10,13,20,0.03)" }}
             >
-              <form
-                onSubmit={handleSubmit}
-                className="flex flex-col gap-[24px] items-start p-[12px] w-full"
-              >
-                {/* Textarea — real interactive input, placeholder matches Figma style */}
-                <textarea
-                  ref={textareaRef}
-                  value={message}
-                  rows={1}
-                  spellCheck={false}
-                  autoComplete="off"
-                  placeholder="What mood are you in"
-                  onChange={(e) => setMessage(e.target.value)}
-                  onKeyDown={(e) => {
-                    // Enter submits; Shift+Enter adds newline
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      handleSubmit();
+              <AnimatePresence mode="wait" initial={false}>
+                {playingAlbum ? (
+                  <NowPlayingCard
+                    key="now-playing"
+                    album={playingAlbum}
+                    isPlaying={isPlaying}
+                    elapsed={elapsed}
+                    onPlayPause={handlePlayPause}
+                    onPrevious={() => handleNavigate("prev")}
+                    onNext={() => handleNavigate("next")}
+                    onClose={handleClose}
+                    reduceMotion={reduceMotion}
+                  />
+                ) : (
+                  <motion.div
+                    key="idle"
+                    initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={
+                      reduceMotion
+                        ? { opacity: 0 }
+                        : { opacity: 0, y: -10, scale: 0.97, transition: { duration: 0.12, ease: "easeIn" } }
                     }
-                  }}
-                  // Prevent drag-start when typing
-                  onPointerDown={(e) => e.stopPropagation()}
-                  className="w-full resize-none outline-none bg-transparent leading-[16px]"
-                  style={{
-                    fontFamily: "'Inter',system-ui,sans-serif",
-                    fontSize: 12,
-                    fontWeight: 400,
-                    fontStyle: "normal",
-                    color: message ? "#171717" : undefined,
-                    fontFeatureSettings: "'ss11' 1,'calt' 0,'liga' 0",
-                    // Placeholder color set via CSS in index.css
-                  }}
-                />
-
-                <div className="flex items-center justify-end w-full">
-                  <motion.button
-                    type="submit"
-                    whileHover={{ scale: 1.07 }}
-                    whileTap={{ scale: 0.94 }}
-                    transition={BTN_SPRING}
-                    aria-label="Send message"
-                    className="relative overflow-hidden rounded-[8px] p-[6px] flex items-center justify-center shrink-0 cursor-pointer"
-                    style={{
-                      background: "#171717",
-                      boxShadow: "0px 0px 0px 0.75px #171717,inset 0px 1px 2px 0px rgba(255,255,255,0.16)",
-                      touchAction: "manipulation",
-                    }}
+                    transition={{ type: "spring", visualDuration: 0.22, bounce: 0.1 }}
                   >
-                    {/* Gloss overlay */}
-                    <div
-                      aria-hidden="true"
-                      className="absolute inset-0 rounded-[8px] pointer-events-none"
-                      style={{ background: "linear-gradient(180deg,rgba(255,255,255,0.154) 6.67%,rgba(255,255,255,0) 103.33%)" }}
-                    />
-                    <div className="relative z-10 size-[14px] flex items-center justify-center">
-                      <ArrowUpIcon />
-                    </div>
-                  </motion.button>
-                </div>
-              </form>
+                    <form
+                      onSubmit={handleSubmit}
+                      className="flex flex-col gap-[24px] items-start p-[12px] w-full"
+                    >
+                      <textarea
+                        ref={textareaRef}
+                        value={message}
+                        rows={1}
+                        spellCheck={false}
+                        autoComplete="off"
+                        placeholder="What mood are you in"
+                        onChange={(e) => setMessage(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault();
+                            handleSubmit();
+                          }
+                        }}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        className="w-full resize-none outline-none bg-transparent leading-[16px]"
+                        style={{
+                          fontFamily: "'Inter',system-ui,sans-serif",
+                          fontSize: 12,
+                          fontWeight: 400,
+                          fontStyle: "normal",
+                          color: message ? "#171717" : undefined,
+                          fontFeatureSettings: "'ss11' 1,'calt' 0,'liga' 0",
+                        }}
+                      />
+
+                      <div className="flex items-center justify-end w-full">
+                        <motion.button
+                          type="submit"
+                          whileHover={{ scale: 1.07 }}
+                          whileTap={{ scale: 0.94 }}
+                          transition={BTN_SPRING}
+                          aria-label="Send message"
+                          className="relative overflow-hidden rounded-[8px] p-[6px] flex items-center justify-center shrink-0 cursor-pointer"
+                          style={{
+                            background: "#171717",
+                            boxShadow:
+                              "0px 0px 0px 0.75px #171717,inset 0px 1px 2px 0px rgba(255,255,255,0.16)",
+                            touchAction: "manipulation",
+                          }}
+                        >
+                          <div
+                            aria-hidden="true"
+                            className="absolute inset-0 rounded-[8px] pointer-events-none"
+                            style={{
+                              background:
+                                "linear-gradient(180deg,rgba(255,255,255,0.154) 6.67%,rgba(255,255,255,0) 103.33%)",
+                            }}
+                          />
+                          <div className="relative z-10 size-[14px] flex items-center justify-center">
+                            <ArrowUpIcon />
+                          </div>
+                        </motion.button>
+                      </div>
+                    </form>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           </div>
-
         </div>
       </motion.div>
     </div>
