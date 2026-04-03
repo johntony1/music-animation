@@ -92,7 +92,8 @@ const ALBUMS = [
     src: albumMavoSrc,
     title: "Mofe",
     artist: "Mavo",
-    query: "Mofe",
+    query: "MOFE Royal Ezenwa",
+    trackId: 1880404506, // direct iTunes lookup — bypasses search
     tint: "rgba(156,67,28,0.2)",
   },
   {
@@ -100,7 +101,7 @@ const ALBUMS = [
     src: albumNo11Src,
     title: "How far",
     artist: "No 11",
-    query: "How Far Davido",
+    query: "How Far NO11",
     tint: "rgba(98,60,3,0.2)",
   },
 ] as const;
@@ -144,6 +145,167 @@ function MusicAiFillIcon() {
           display: "block",
         }}
       />
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────
+ * ANIMATED MUSIC ICON — now playing indicator
+ *
+ * STORYBOARD
+ *
+ * IDLE
+ *   icon: scale:1, static
+ *
+ * IDLE → PLAYING (0ms)
+ *   icon: spring pop 1→1.22→1 (stiffness:380, damping:16) — one-shot
+ *   dots: spring out from icon center, staggered 0/70/140ms
+ *         (scale:0, opacity:0) → (scale:1, opacity:1)
+ *
+ * PLAYING (continuous)
+ *   3 dots orbit at independent radii and speeds, driven by RAF:
+ *     dot 0 — r:13px, period:3.2s, starts 0°
+ *     dot 1 — r: 9px, period:4.8s, starts 120°  (inner, slow)
+ *     dot 2 — r:17px, period:2.4s, starts 240°  (outer, fast)
+ *   each dot: 3.5px circle, indigo rgba(99,102,241,0.9)
+ *             box-shadow glow: 0 0 6px rgba(99,102,241,0.55)
+ *   icon: scale breathe 1→1.06→1 (1.8s mirror easeInOut)
+ *
+ * PLAYING → PAUSED
+ *   orbit RAF stops
+ *   dots: spring collapse (scale:0, opacity:0, duration:0.18 easeIn)
+ *   icon: spring back to scale:1
+ *
+ * prefers-reduced-motion → static icon only, no dots
+ * ───────────────────────────────────────────────────────── */
+const ORBITS = [
+  { radius: 13, period: 3.2,  startAngle: 0   },
+  { radius:  9, period: 4.8,  startAngle: 120 },
+  { radius: 17, period: 2.4,  startAngle: 240 },
+] as const;
+
+const DOT_COLOR = "rgba(99, 102, 241, 0.9)";
+const DOT_GLOW  = "0 0 0 1.5px rgba(99,102,241,0.12), 0 0 6px rgba(99,102,241,0.55)";
+
+function AnimatedMusicIcon({
+  isPlaying,
+  reduceMotion,
+}: {
+  isPlaying: boolean;
+  reduceMotion: boolean;
+}) {
+  const active = isPlaying && !reduceMotion;
+  const rafRef  = useRef<number>(0);
+  const lastRef = useRef(0);
+
+  // ── Orbit angles — one motion value per dot ───────────────
+  const angle0 = useMotionValue<number>(ORBITS[0].startAngle);
+  const angle1 = useMotionValue<number>(ORBITS[1].startAngle);
+  const angle2 = useMotionValue<number>(ORBITS[2].startAngle);
+
+  // ── Derived x / y for each dot ───────────────────────────
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const x0 = useTransform(angle0, (a) => Math.cos(toRad(a)) * ORBITS[0].radius);
+  const y0 = useTransform(angle0, (a) => Math.sin(toRad(a)) * ORBITS[0].radius);
+  const x1 = useTransform(angle1, (a) => Math.cos(toRad(a)) * ORBITS[1].radius);
+  const y1 = useTransform(angle1, (a) => Math.sin(toRad(a)) * ORBITS[1].radius);
+  const x2 = useTransform(angle2, (a) => Math.cos(toRad(a)) * ORBITS[2].radius);
+  const y2 = useTransform(angle2, (a) => Math.sin(toRad(a)) * ORBITS[2].radius);
+
+  // ── RAF loop drives orbit while active ───────────────────
+  useEffect(() => {
+    if (!active) return;
+    lastRef.current = performance.now();
+    const allAngles = [angle0, angle1, angle2];
+    const tick = (now: number) => {
+      const dt = (now - lastRef.current) / 1000;
+      lastRef.current = now;
+      allAngles.forEach((angle, i) => {
+        angle.set(angle.get() + dt * (360 / ORBITS[i].period));
+      });
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [active, angle0, angle1, angle2]);
+
+  const dots = [
+    { x: x0, y: y0 },
+    { x: x1, y: y1 },
+    { x: x2, y: y2 },
+  ];
+
+  return (
+    <div
+      style={{ position: "relative", width: 16, height: 16, flexShrink: 0, overflow: "visible" }}
+      aria-hidden="true"
+    >
+      {/* ── Orbiting dots ─────────────────────────────────── */}
+      <AnimatePresence>
+        {active &&
+          dots.map((pos, i) => (
+            <motion.div
+              key={i}
+              initial={{ scale: 0, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0, opacity: 0, transition: { duration: 0.18, ease: "easeIn" } }}
+              transition={{ type: "spring", stiffness: 340, damping: 22, delay: i * 0.07 }}
+              style={{
+                position: "absolute",
+                top: "50%",
+                left: "50%",
+                x: pos.x,
+                y: pos.y,
+                translateX: "-50%",
+                translateY: "-50%",
+                width: 3.5,
+                height: 3.5,
+                borderRadius: "50%",
+                background: DOT_COLOR,
+                boxShadow: DOT_GLOW,
+                pointerEvents: "none",
+              }}
+            />
+          ))}
+      </AnimatePresence>
+
+      {/* ── Icon: pop on entry + continuous breathe ──────── */}
+      <motion.div
+        key={String(isPlaying)}
+        initial={active ? { scale: 1 } : false}
+        animate={active ? { scale: [1, 1.22, 1] } : { scale: 1 }}
+        transition={
+          active
+            ? {
+                scale: {
+                  times: [0, 0.35, 1],
+                  duration: 0.45,
+                  ease: [0.34, 1.56, 0.64, 1], // back-ease overshoot
+                },
+              }
+            : { type: "spring", stiffness: 300, damping: 28 }
+        }
+      >
+        {/* Continuous breathe wrapper — separate from one-shot pop */}
+        <motion.div
+          animate={active ? { scale: [1, 1.06, 1] } : { scale: 1 }}
+          transition={
+            active
+              ? {
+                  scale: {
+                    repeat: Infinity,
+                    repeatType: "mirror",
+                    duration: 1.8,
+                    ease: "easeInOut",
+                    delay: 0.45, // starts after the pop settles
+                  },
+                }
+              : {}
+          }
+        >
+          <MusicAiFillIcon />
+        </motion.div>
+      </motion.div>
     </div>
   );
 }
@@ -343,7 +505,7 @@ function NowPlayingCard({
         style={{ paddingLeft: 12, paddingRight: 12 }}
       >
         <div className="flex items-center" style={{ gap: 4 }}>
-          <MusicAiFillIcon />
+          <AnimatedMusicIcon isPlaying={isPlaying} reduceMotion={reduceMotion} />
           <span
             style={{
               fontSize: 12,
@@ -731,27 +893,38 @@ function AlbumCard({
   album,
   reduceMotion,
   onPlay,
+  onNowPlayingHoverStart,
+  onNowPlayingHoverEnd,
 }: {
   album: Album;
   reduceMotion: boolean;
   onPlay?: (album: Album, previewUrl: string | null) => void;
+  onNowPlayingHoverStart?: () => void;
+  onNowPlayingHoverEnd?: () => void;
 }) {
   const [hovered, setHovered]       = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const fadeRef  = useRef<number>(0);
 
-  // Fetch iTunes 30s preview once on mount
+  // Fetch iTunes 30s preview once on mount.
+  // If trackId is set, use the lookup API (exact match).
+  // Otherwise fall back to search by query string.
   useEffect(() => {
     let cancelled = false;
-    fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(album.query)}&media=music&limit=1`)
+    const url = "trackId" in album && album.trackId
+      ? `https://itunes.apple.com/lookup?id=${album.trackId}`
+      : `https://itunes.apple.com/search?term=${encodeURIComponent(album.query)}&media=music&limit=1`;
+    fetch(url)
       .then((r) => r.json())
       .then((d) => {
-        if (!cancelled && d.results?.[0]?.previewUrl) setPreviewUrl(d.results[0].previewUrl);
+        const preview = d.results?.find((r: { previewUrl?: string }) => r.previewUrl)?.previewUrl ?? null;
+        if (!cancelled && preview) setPreviewUrl(preview);
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [album.query]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [album.id]);
 
   // Cleanup audio on unmount
   useEffect(() => () => { audioRef.current?.pause(); }, []);
@@ -793,8 +966,8 @@ function AlbumCard({
     <motion.div
       className="flex flex-col gap-[8px] items-start shrink-0 cursor-pointer"
       style={{ width: 100 }}
-      onHoverStart={() => { setHovered(true); startAudio(); }}
-      onHoverEnd={() => { setHovered(false); stopAudio(); }}
+      onHoverStart={() => { setHovered(true); startAudio(); onNowPlayingHoverStart?.(); }}
+      onHoverEnd={() => { setHovered(false); stopAudio(); onNowPlayingHoverEnd?.(); }}
       whileTap={reduceMotion ? {} : { scale: 0.93 }}
       transition={BTN_SPRING}
       onClick={() => {
@@ -925,6 +1098,9 @@ export function ChatbotIdle() {
   const nowPlayingAudioRef              = useRef<HTMLAudioElement | null>(null);
   const nowPlayingFadeRef               = useRef<number>(0);
   const previewUrlsCache                = useRef<Map<number, string | null>>(new Map());
+  // Ref so hover callbacks don't go stale
+  const isPlayingRef                    = useRef(false);
+  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
 
   // Elapsed timer
   useEffect(() => {
@@ -1041,6 +1217,19 @@ export function ChatbotIdle() {
     setIsPlaying(false);
     setElapsed(0);
   }, [stopNowPlayingAudio]);
+
+  // Hover on album card pauses now-playing audio (resumes on leave)
+  const handleAlbumHoverStart = useCallback(() => {
+    if (isPlayingRef.current && nowPlayingAudioRef.current) {
+      nowPlayingAudioRef.current.pause();
+    }
+  }, []);
+
+  const handleAlbumHoverEnd = useCallback(() => {
+    if (isPlayingRef.current && nowPlayingAudioRef.current) {
+      nowPlayingAudioRef.current.play().catch(() => {});
+    }
+  }, []);
 
   // Cleanup on unmount
   useEffect(() => () => stopNowPlayingAudio(), [stopNowPlayingAudio]);
@@ -1175,6 +1364,8 @@ export function ChatbotIdle() {
                     album={album}
                     reduceMotion={reduceMotion}
                     onPlay={handlePlayAlbum}
+                    onNowPlayingHoverStart={handleAlbumHoverStart}
+                    onNowPlayingHoverEnd={handleAlbumHoverEnd}
                   />
                 ))}
               </div>
