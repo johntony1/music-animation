@@ -25,4 +25,16 @@
     -moz-osx-font-smoothing: grayscale;
     font-family: 'Inter', system-ui, sans-serif;
   }
+
+  /* Chatbot input placeholder matches Figma's #a3a3a3 text/soft-400 */
+  textarea::placeholder {
+    color: #a3a3a3;
+    font-weight: 400;
+    opacity: 1;
+  }
+
+  /* Prevent hover effects on touch-only devices */
+  @media (hover: none) {
+    .album-card-hover { pointer-events: none; }
+  }
 }
