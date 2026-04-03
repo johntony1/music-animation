@@ -94,6 +94,7 @@ const ALBUMS = [
     artist: "Mavo",
     query: "MOFE Royal Ezenwa",
     trackId: 1880404506, // direct iTunes lookup — bypasses search
+    country: "ng",       // only available in Nigerian store
     tint: "rgba(156,67,28,0.2)",
   },
   {
@@ -102,6 +103,7 @@ const ALBUMS = [
     title: "How far",
     artist: "No 11",
     query: "How Far NO11",
+    country: "ng",       // only available in Nigerian store
     tint: "rgba(98,60,3,0.2)",
   },
 ] as const;
@@ -753,11 +755,13 @@ function AlbumCard({
   // Fetch iTunes 30s preview once on mount.
   // If trackId is set, use the lookup API (exact match).
   // Otherwise fall back to search by query string.
+  // country param routes to the correct regional store (e.g. "ng" for Nigerian artists).
   useEffect(() => {
     let cancelled = false;
+    const country = "country" in album && album.country ? album.country : "us";
     const url = "trackId" in album && album.trackId
-      ? `https://itunes.apple.com/lookup?id=${album.trackId}`
-      : `https://itunes.apple.com/search?term=${encodeURIComponent(album.query)}&media=music&limit=1`;
+      ? `https://itunes.apple.com/lookup?id=${album.trackId}&entity=song&country=${country}`
+      : `https://itunes.apple.com/search?term=${encodeURIComponent(album.query)}&media=music&entity=song&limit=5&country=${country}`;
     fetch(url)
       .then((r) => r.json())
       .then((d) => {
@@ -1037,15 +1041,15 @@ export function ChatbotIdle() {
       if (cachedUrl !== undefined) {
         handlePlayAlbum(nextAlbum, cachedUrl);
       } else {
-        // Fetch on demand
-        fetch(
-          `https://itunes.apple.com/search?term=${encodeURIComponent(
-            nextAlbum.query
-          )}&media=music&limit=1`
-        )
+        // Fetch on demand — respect per-album country and trackId
+        const country = "country" in nextAlbum && nextAlbum.country ? nextAlbum.country : "us";
+        const fetchUrl = "trackId" in nextAlbum && nextAlbum.trackId
+          ? `https://itunes.apple.com/lookup?id=${nextAlbum.trackId}&entity=song&country=${country}`
+          : `https://itunes.apple.com/search?term=${encodeURIComponent(nextAlbum.query)}&media=music&entity=song&limit=5&country=${country}`;
+        fetch(fetchUrl)
           .then((r) => r.json())
           .then((d) => {
-            const url = d.results?.[0]?.previewUrl ?? null;
+            const url = d.results?.find((r: { previewUrl?: string }) => r.previewUrl)?.previewUrl ?? null;
             handlePlayAlbum(nextAlbum, url);
           })
           .catch(() => handlePlayAlbum(nextAlbum, null));
